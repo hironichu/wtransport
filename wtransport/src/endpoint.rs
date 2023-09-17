@@ -11,6 +11,7 @@ use crate::error::ConnectionError;
 use quinn::Endpoint as QuicEndpoint;
 use quinn::EndpointConfig as QuicEndpointConfig;
 use quinn::TokioRuntime;
+use quinn_proto::VarInt;
 use socket2::Domain as SocketDomain;
 use socket2::Protocol as SocketProtocol;
 use socket2::Socket;
@@ -97,6 +98,10 @@ impl Endpoint<Server> {
 
         IncomingSession::new(quic_connecting)
     }
+	/// Close the endpoint.
+	pub fn close(&self, error_code: VarInt, reason: &[u8]) {
+		self.endpoint.close(error_code, reason);
+	}
 }
 
 impl Endpoint<Client> {
@@ -257,6 +262,10 @@ impl Endpoint<Client> {
 
         Ok(Connection::new(quic_connection, driver, session_id))
     }
+	/// Close the endpoint.
+	pub fn close(&self, error_code: VarInt, reason: &[u8]) {
+		self.endpoint.close(error_code, reason);
+	}
 }
 
 type DynFutureIncomingSession =
