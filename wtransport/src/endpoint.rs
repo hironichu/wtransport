@@ -11,11 +11,12 @@ use crate::error::ConnectionError;
 use quinn::Endpoint as QuicEndpoint;
 use quinn::EndpointConfig as QuicEndpointConfig;
 use quinn::TokioRuntime;
-use quinn_proto::VarInt;
+
 use socket2::Domain as SocketDomain;
 use socket2::Protocol as SocketProtocol;
 use socket2::Socket;
 use socket2::Type as SocketType;
+use wtransport_proto::varint::VarInt;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -99,8 +100,9 @@ impl Endpoint<Server> {
         IncomingSession::new(quic_connecting)
     }
 	/// Close the endpoint.
-	pub fn close(&self, error_code: VarInt, reason: &[u8]) {
-		self.endpoint.close(error_code, reason);
+	pub fn close(&self, error_code: u32, reason: &[u8]) {
+		let quinn_varint = quinn::VarInt::from_u32(error_code);
+		self.endpoint.close(quinn_varint, reason);
 	}
 }
 
@@ -263,8 +265,9 @@ impl Endpoint<Client> {
         Ok(Connection::new(quic_connection, driver, session_id))
     }
 	/// Close the endpoint.
-	pub fn close(&self, error_code: VarInt, reason: &[u8]) {
-		self.endpoint.close(error_code, reason);
+	pub fn close(&self, error_code: u32, reason: &[u8]) {
+		let quinn_varint = quinn::VarInt::from_u32(error_code);
+		self.endpoint.close(quinn_varint, reason);
 	}
 }
 
