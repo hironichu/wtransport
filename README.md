@@ -61,12 +61,7 @@ async fn main() -> Result<()> {
 ```rust
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = ClientConfig::builder()
-        .with_bind_default()
-        .with_native_certs()
-        .build();
-
-    let connection = Endpoint::client(config)?
+    let connection = Endpoint::client(ClientConfig::default())?
         .connect("https://[::1]:4433")
         .await?;
 
@@ -116,7 +111,7 @@ Since the generated certificate is self-signed, it cannot be directly accepted b
 In order to allow the local certificate, you need to launch Google Chrome with two additional options:
 ```
 google-chrome \
-  --origin-to-force-quic-on=localhost:4433 \
+  --webtransport-developer-mode \
   --ignore-certificate-errors-spki-list=FINGERPRINT
 ```
 

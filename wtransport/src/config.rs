@@ -9,11 +9,13 @@ use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::net::SocketAddr;
+use std::net::SocketAddrV6;
 use std::sync::Arc;
 use std::time::Duration;
 use wtransport_proto::WEBTRANSPORT_ALPN;
 
 /// Configuration for IP address socket bind.
+#[derive(Debug, Copy, Clone)]
 pub enum IpBindConfig {
     /// Bind to LOCALHOST IPv4 address (no IPv6).
     LocalV4,
@@ -21,7 +23,7 @@ pub enum IpBindConfig {
     /// Bind to LOCALHOST IPv6 address (no IPv4).
     LocalV6,
 
-    /// Bind to LOCALHOST both IPv4 and IPv6 address (dual stack).
+    /// Bind to LOCALHOST both IPv4 and IPv6 address (dual stack, if supported).
     LocalDual,
 
     /// Bind to INADDR_ANY IPv4 address (no IPv6).
@@ -30,8 +32,46 @@ pub enum IpBindConfig {
     /// Bind to INADDR_ANY IPv6 address (no IPv4).
     InAddrAnyV6,
 
-    /// Bind to INADDR_ANY both IPv4 and IPv6 address (dual stack).
+    /// Bind to INADDR_ANY both IPv4 and IPv6 address (dual stack, if supported).
     InAddrAnyDual,
+}
+
+impl IpBindConfig {
+    fn into_ip(self) -> IpAddr {
+        match self {
+            IpBindConfig::LocalV4 => Ipv4Addr::LOCALHOST.into(),
+            IpBindConfig::LocalV6 => Ipv6Addr::LOCALHOST.into(),
+            IpBindConfig::LocalDual => Ipv6Addr::LOCALHOST.into(),
+            IpBindConfig::InAddrAnyV4 => Ipv4Addr::UNSPECIFIED.into(),
+            IpBindConfig::InAddrAnyV6 => Ipv6Addr::UNSPECIFIED.into(),
+            IpBindConfig::InAddrAnyDual => Ipv6Addr::UNSPECIFIED.into(),
+        }
+    }
+
+    fn into_dual_stack_config(self) -> Ipv6DualStackConfig {
+        match self {
+            IpBindConfig::LocalV4 | IpBindConfig::InAddrAnyV4 => Ipv6DualStackConfig::OsDefault,
+            IpBindConfig::LocalV6 | IpBindConfig::InAddrAnyV6 => Ipv6DualStackConfig::Deny,
+            IpBindConfig::LocalDual | IpBindConfig::InAddrAnyDual => Ipv6DualStackConfig::Allow,
+        }
+    }
+}
+
+/// Configuration for IPv6 dual stack.
+#[derive(Debug, Copy, Clone)]
+pub enum Ipv6DualStackConfig {
+    /// Do not configure dual stack. Use OS's default.
+    OsDefault,
+
+    /// Deny dual stack. This is equivalent to `IPV6_V6ONLY`.
+    ///
+    /// Socket will only bind for IPv6 (IPv4 port will still be available).
+    Deny,
+
+    /// Allow dual stack.
+    ///
+    /// Please note that not all configurations/platforms support dual stack.
+    Allow,
 }
 
 /// Invalid idle timeout.
@@ -43,7 +83,7 @@ pub struct InvalidIdleTimeout;
 /// Configuration can be created via [`ServerConfig::builder`] function.
 pub struct ServerConfig {
     pub(crate) bind_address: SocketAddr,
-    pub(crate) bind_only_ipv6: bool,
+    pub(crate) dual_stack_config: Ipv6DualStackConfig,
     pub(crate) quic_config: QuicServerConfig,
 }
 
@@ -73,9 +113,11 @@ impl ServerConfig {
 pub struct ServerConfigBuilder<State>(State);
 
 impl ServerConfigBuilder<WantsBindAddress> {
-    /// Configures for accepting incoming connections binding ANY IP (both IPv4 and IPv6).
+    /// Configures for accepting incoming connections binding ANY IP (allowing IP dual-stack).
     ///
     /// `listening_port` is the port where the server will accept incoming connections.
+    ///
+    /// This is equivalent to: [`Self::with_bind_config`] with [`IpBindConfig::InAddrAnyDual`].
     pub fn with_bind_default(self, listening_port: u16) -> ServerConfigBuilder<WantsCertificate> {
         self.with_bind_config(IpBindConfig::InAddrAnyDual, listening_port)
     }
@@ -88,27 +130,36 @@ impl ServerConfigBuilder<WantsBindAddress> {
         ip_bind_config: IpBindConfig,
         listening_port: u16,
     ) -> ServerConfigBuilder<WantsCertificate> {
-        let (ip_address, only_v6): (IpAddr, bool) = match ip_bind_config {
-            IpBindConfig::LocalV4 => (Ipv4Addr::LOCALHOST.into(), true),
-            IpBindConfig::LocalV6 => (Ipv4Addr::LOCALHOST.into(), true),
-            IpBindConfig::LocalDual => (Ipv6Addr::LOCALHOST.into(), false),
-            IpBindConfig::InAddrAnyV4 => (Ipv4Addr::UNSPECIFIED.into(), true),
-            IpBindConfig::InAddrAnyV6 => (Ipv6Addr::UNSPECIFIED.into(), true),
-            IpBindConfig::InAddrAnyDual => (Ipv6Addr::UNSPECIFIED.into(), false),
-        };
+        let ip_address: IpAddr = ip_bind_config.into_ip();
 
-        self.with_bind_address(SocketAddr::new(ip_address, listening_port), only_v6)
+        match ip_address {
+            IpAddr::V4(ip) => self.with_bind_address(SocketAddr::new(ip.into(), listening_port)),
+            IpAddr::V6(ip) => self.with_bind_address_v6(
+                SocketAddrV6::new(ip, listening_port, 0, 0),
+                ip_bind_config.into_dual_stack_config(),
+            ),
+        }
     }
 
     /// Sets the binding (local) socket address for the endpoint.
-    pub fn with_bind_address(
-        self,
-        address: SocketAddr,
-        only_v6: bool,
-    ) -> ServerConfigBuilder<WantsCertificate> {
+    pub fn with_bind_address(self, address: SocketAddr) -> ServerConfigBuilder<WantsCertificate> {
         ServerConfigBuilder(WantsCertificate {
             bind_address: address,
-            bind_only_ipv6: only_v6,
+            dual_stack_config: Ipv6DualStackConfig::OsDefault,
+        })
+    }
+
+    /// Sets the binding (local) socket address for the endpoint with Ipv6 address.
+    ///
+    /// `dual_stack_config` allows/denies dual stack port binding.
+    pub fn with_bind_address_v6(
+        self,
+        address: SocketAddrV6,
+        dual_stack_config: Ipv6DualStackConfig,
+    ) -> ServerConfigBuilder<WantsCertificate> {
+        ServerConfigBuilder(WantsCertificate {
+            bind_address: address.into(),
+            dual_stack_config,
         })
     }
 }
@@ -125,7 +176,7 @@ impl ServerConfigBuilder<WantsCertificate> {
 
         ServerConfigBuilder(WantsTransportConfigServer {
             bind_address: self.0.bind_address,
-            bind_only_ipv6: self.0.bind_only_ipv6,
+            dual_stack_config: self.0.dual_stack_config,
             tls_config,
             transport_config,
             migration: true,
@@ -137,7 +188,7 @@ impl ServerConfigBuilder<WantsCertificate> {
             .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(certificate.certificates, certificate.key)
-            .unwrap(); // TODO(bfesta): handle this error
+            .expect("Certificate and private key should be already validated");
 
         tls_config.alpn_protocols = [WEBTRANSPORT_ALPN.to_vec()].to_vec();
 
@@ -154,7 +205,7 @@ impl ServerConfigBuilder<WantsTransportConfigServer> {
 
         ServerConfig {
             bind_address: self.0.bind_address,
-            bind_only_ipv6: self.0.bind_only_ipv6,
+            dual_stack_config: self.0.dual_stack_config,
             quic_config,
         }
     }
@@ -207,7 +258,7 @@ impl ServerConfigBuilder<WantsTransportConfigServer> {
 /// Configuration can be created via [`ClientConfig::builder`] function.
 pub struct ClientConfig {
     pub(crate) bind_address: SocketAddr,
-    pub(crate) bind_only_ipv6: bool,
+    pub(crate) dual_stack_config: Ipv6DualStackConfig,
     pub(crate) quic_config: QuicClientConfig,
 }
 
@@ -217,6 +268,15 @@ impl ClientConfig {
     /// For more information, see the [`ClientConfigBuilder`] documentation.
     pub fn builder() -> ClientConfigBuilder<WantsBindAddress> {
         ClientConfigBuilder::default()
+    }
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        ClientConfig::builder()
+            .with_bind_default()
+            .with_native_certs()
+            .build()
     }
 }
 
@@ -234,9 +294,11 @@ impl ClientConfig {
 pub struct ClientConfigBuilder<State>(State);
 
 impl ClientConfigBuilder<WantsBindAddress> {
-    /// Configures for connecting binding ANY IP (both IPv4 and IPv6).
+    /// Configures for connecting binding ANY IP (allowing IP dual-stack).
     ///
     /// Bind port will be randomly picked.
+    ///
+    /// This is equivalent to: [`Self::with_bind_config`] with [`IpBindConfig::InAddrAnyDual`].
     pub fn with_bind_default(self) -> ClientConfigBuilder<WantsRootStore> {
         self.with_bind_config(IpBindConfig::InAddrAnyDual)
     }
@@ -248,27 +310,36 @@ impl ClientConfigBuilder<WantsBindAddress> {
         self,
         ip_bind_config: IpBindConfig,
     ) -> ClientConfigBuilder<WantsRootStore> {
-        let (ip_address, only_v6): (IpAddr, bool) = match ip_bind_config {
-            IpBindConfig::LocalV4 => (Ipv4Addr::LOCALHOST.into(), true),
-            IpBindConfig::LocalV6 => (Ipv4Addr::LOCALHOST.into(), true),
-            IpBindConfig::LocalDual => (Ipv6Addr::LOCALHOST.into(), false),
-            IpBindConfig::InAddrAnyV4 => (Ipv4Addr::UNSPECIFIED.into(), true),
-            IpBindConfig::InAddrAnyV6 => (Ipv6Addr::UNSPECIFIED.into(), true),
-            IpBindConfig::InAddrAnyDual => (Ipv6Addr::UNSPECIFIED.into(), false),
-        };
+        let ip_address: IpAddr = ip_bind_config.into_ip();
 
-        self.with_bind_address(SocketAddr::new(ip_address, 0), only_v6)
+        match ip_address {
+            IpAddr::V4(ip) => self.with_bind_address(SocketAddr::new(ip.into(), 0)),
+            IpAddr::V6(ip) => self.with_bind_address_v6(
+                SocketAddrV6::new(ip, 0, 0, 0),
+                ip_bind_config.into_dual_stack_config(),
+            ),
+        }
     }
 
     /// Sets the binding (local) socket address for the endpoint.
-    pub fn with_bind_address(
-        self,
-        address: SocketAddr,
-        only_v6: bool,
-    ) -> ClientConfigBuilder<WantsRootStore> {
+    pub fn with_bind_address(self, address: SocketAddr) -> ClientConfigBuilder<WantsRootStore> {
         ClientConfigBuilder(WantsRootStore {
             bind_address: address,
-            bind_only_ipv6: only_v6,
+            dual_stack_config: Ipv6DualStackConfig::OsDefault,
+        })
+    }
+
+    /// Sets the binding (local) socket address for the endpoint.
+    ///
+    /// `dual_stack_config` allows/denies dual stack port binding.
+    pub fn with_bind_address_v6(
+        self,
+        address: SocketAddrV6,
+        dual_stack_config: Ipv6DualStackConfig,
+    ) -> ClientConfigBuilder<WantsRootStore> {
+        ClientConfigBuilder(WantsRootStore {
+            bind_address: address.into(),
+            dual_stack_config,
         })
     }
 }
@@ -281,7 +352,7 @@ impl ClientConfigBuilder<WantsRootStore> {
 
         ClientConfigBuilder(WantsTransportConfigClient {
             bind_address: self.0.bind_address,
-            bind_only_ipv6: self.0.bind_only_ipv6,
+            dual_stack_config: self.0.dual_stack_config,
             tls_config,
             transport_config,
         })
@@ -300,7 +371,7 @@ impl ClientConfigBuilder<WantsRootStore> {
 
         ClientConfigBuilder(WantsTransportConfigClient {
             bind_address: self.0.bind_address,
-            bind_only_ipv6: self.0.bind_only_ipv6,
+            dual_stack_config: self.0.dual_stack_config,
             tls_config,
             transport_config,
         })
@@ -343,7 +414,7 @@ impl ClientConfigBuilder<WantsTransportConfigClient> {
 
         ClientConfig {
             bind_address: self.0.bind_address,
-            bind_only_ipv6: self.0.bind_only_ipv6,
+            dual_stack_config: self.0.dual_stack_config,
             quic_config,
         }
     }
@@ -400,19 +471,19 @@ pub struct WantsBindAddress {}
 /// Config builder state where the caller must supply TLS certificate.
 pub struct WantsCertificate {
     bind_address: SocketAddr,
-    bind_only_ipv6: bool,
+    dual_stack_config: Ipv6DualStackConfig,
 }
 
 /// Config builder state where the caller must supply TLS root store.
 pub struct WantsRootStore {
     bind_address: SocketAddr,
-    bind_only_ipv6: bool,
+    dual_stack_config: Ipv6DualStackConfig,
 }
 
 /// Config builder state where transport properties can be set.
 pub struct WantsTransportConfigServer {
     bind_address: SocketAddr,
-    bind_only_ipv6: bool,
+    dual_stack_config: Ipv6DualStackConfig,
     tls_config: TlsServerConfig,
     transport_config: quinn::TransportConfig,
     migration: bool,
@@ -421,7 +492,7 @@ pub struct WantsTransportConfigServer {
 /// Config builder state where transport properties can be set.
 pub struct WantsTransportConfigClient {
     bind_address: SocketAddr,
-    bind_only_ipv6: bool,
+    dual_stack_config: Ipv6DualStackConfig,
     tls_config: TlsClientConfig,
     transport_config: quinn::TransportConfig,
 }

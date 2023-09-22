@@ -1,4 +1,5 @@
 use crate::config::ClientConfig;
+use crate::config::Ipv6DualStackConfig;
 use crate::config::ServerConfig;
 use crate::connection::Connection;
 use crate::driver::streams::session::StreamSession;
@@ -8,15 +9,12 @@ use crate::driver::utils::varint_w2q;
 use crate::driver::Driver;
 use crate::error::ConnectingError;
 use crate::error::ConnectionError;
-use quinn::Endpoint as QuicEndpoint;
-use quinn::EndpointConfig as QuicEndpointConfig;
 use quinn::TokioRuntime;
 
 use socket2::Domain as SocketDomain;
 use socket2::Protocol as SocketProtocol;
 use socket2::Socket;
 use socket2::Type as SocketType;
-use quinn::Runtime;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -37,47 +35,107 @@ use wtransport_proto::headers::Headers;
 use wtransport_proto::session::SessionRequest as SessionRequestProto;
 use wtransport_proto::session::SessionResponse as SessionResponseProto;
 
-/// Type of endpoint accepting multiple WebTransport connections.
-pub struct Server;
+/// Helper structure for Endpoind types.
+pub mod endpoint_side {
+    /// Type of endpoint accepting multiple WebTransport connections.
+    pub struct Server;
 
-/// Type of endpoint opening a WebTransport connection.
-pub struct Client;
+    /// Type of endpoint opening a WebTransport connection.
+    pub struct Client;
+}
 
 /// Entrypoint for creating client or server connections.
 ///
-/// * For creating a server: [`Endpoint::server`].
-/// * For creating a client: [`Endpoint::client`].
+/// A single endpoint can be used to accept or connect multiple connections.
+/// Each endpoint internally binds an UDP socket.
+///
+/// # Server
+/// Use [`Endpoint::server`] for creating a server-side endpoint.
+/// Afterwards use the method [`Endpoint::accept`] for awaiting on incoming session request.
+///
+/// ```no_run
+/// # use anyhow::Result;
+/// # use wtransport::ServerConfig;
+/// # use wtransport::tls::Certificate;
+/// use wtransport::Endpoint;
+///
+/// # async fn run() -> Result<()> {
+/// # let config = ServerConfig::builder()
+/// #       .with_bind_default(4433)
+/// #       .with_certificate(Certificate::load("cert.pem", "key.pem")?)
+/// #       .build();
+/// let server = Endpoint::server(config)?;
+/// loop {
+///     let incoming_session = server.accept().await;
+///     // Spawn task that handles client incoming session...
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Client
+/// Use [`Endpoint::client`] for creating a client-side endpoint and use [`Endpoint::connect`]
+/// to connect to a server specifying the URL.
+///
+/// ```no_run
+/// # use anyhow::Result;
+/// # use wtransport::tls::Certificate;
+/// use wtransport::ClientConfig;
+/// use wtransport::Endpoint;
+///
+/// # async fn run() -> Result<()> {
+/// let connection = Endpoint::client(ClientConfig::default())?
+///     .connect("https://localhost:4433")
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct Endpoint<Side> {
-    endpoint: QuicEndpoint,
+    endpoint: quinn::Endpoint,
 	/// The runtime used by the endpoint.
 	pub runtime: Arc<dyn Runtime>,
     _marker: PhantomData<Side>,
 }
 
 impl<Side> Endpoint<Side> {
-    fn bind_socket(bind_address: SocketAddr, only_v6: bool) -> std::io::Result<Socket> {
+    fn bind_socket(
+        bind_address: SocketAddr,
+        dual_stack_config: Ipv6DualStackConfig,
+    ) -> std::io::Result<Socket> {
         let domain = match bind_address {
             SocketAddr::V4(_) => SocketDomain::IPV4,
             SocketAddr::V6(_) => SocketDomain::IPV6,
         };
 
         let socket = Socket::new(domain, SocketType::DGRAM, Some(SocketProtocol::UDP))?;
-        socket.set_only_v6(only_v6)?;
+
+        match dual_stack_config {
+            Ipv6DualStackConfig::OsDefault => {}
+            Ipv6DualStackConfig::Deny => socket.set_only_v6(true)?,
+            Ipv6DualStackConfig::Allow => socket.set_only_v6(false)?,
+        }
+
         socket.bind(&bind_address.into())?;
 
         Ok(socket)
     }
+
+    /// Waits for all connections on the endpoint to be cleanly shut down.
+    pub async fn wait_idle(&self) {
+        self.endpoint.wait_idle().await;
+    }
 }
 
-impl Endpoint<Server> {
+impl Endpoint<endpoint_side::Server> {
     /// Constructs a *server* endpoint.
     pub fn server(server_config: ServerConfig) -> std::io::Result<Self> {
         let quic_config = server_config.quic_config;
-        let socket = Self::bind_socket(server_config.bind_address, server_config.bind_only_ipv6)?;
+        let socket =
+            Self::bind_socket(server_config.bind_address, server_config.dual_stack_config)?;
         let runtime = Arc::new(TokioRuntime);
 
-        let endpoint = QuicEndpoint::new(
-            QuicEndpointConfig::default(),
+        let endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
             Some(quic_config),
             socket.into(),
             runtime.clone(),
@@ -85,7 +143,6 @@ impl Endpoint<Server> {
 
         Ok(Self {
             endpoint,
-			runtime,
             _marker: PhantomData,
         })
     }
@@ -107,25 +164,27 @@ impl Endpoint<Server> {
 		let quinn_varint = quinn::VarInt::from_u32(error_code);
 		self.endpoint.close(quinn_varint, reason);
 	}
-	/// Wait for all connections to be closed.
-	pub async fn wait_idle(&self) {
-		self.endpoint.wait_idle().await;
-	}
+
 }
 
-impl Endpoint<Client> {
+impl Endpoint<endpoint_side::Client> {
     /// Constructs a *client* endpoint.
     pub fn client(client_config: ClientConfig) -> std::io::Result<Self> {
         let quic_config = client_config.quic_config;
-        let socket = Self::bind_socket(client_config.bind_address, client_config.bind_only_ipv6)?;
+        let socket =
+            Self::bind_socket(client_config.bind_address, client_config.dual_stack_config)?;
         let runtime = Arc::new(TokioRuntime);
 
-        let mut endpoint =
-            QuicEndpoint::new(QuicEndpointConfig::default(), None, socket.into(), runtime.clone())?;
+        let mut endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            None,
+            socket.into(),
+            runtime,
+        )?;
+
         endpoint.set_default_client_config(quic_config);
 
         Ok(Self {
-			runtime,
             endpoint,
             _marker: PhantomData,
         })
@@ -277,10 +336,7 @@ impl Endpoint<Client> {
 		let quinn_varint = quinn::VarInt::from_u32(error_code);
 		self.endpoint.close(quinn_varint, reason);
 	}
-	/// Wait for all connections to be closed.
-	pub async fn wait_idle(&self) {
-		self.endpoint.wait_idle().await;
-	}
+
 }
 
 type DynFutureIncomingSession =
