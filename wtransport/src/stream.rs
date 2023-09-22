@@ -118,7 +118,7 @@ impl RecvStream {
     ///
     /// If the stream is stopped the error code will be stored in [`AlreadyStop`].
     #[inline(always)]
-    pub async fn stop(mut self, code: u32) -> Result<(), AlreadyStop> {
+    pub async fn stop(&mut self, code: u32) -> Result<(), AlreadyStop> {
         self.0.stop(VarInt::from_u32(code))
     }
 
