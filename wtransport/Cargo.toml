@@ -10,23 +10,23 @@ categories = [ "network-programming", "asynchronous" ]
 edition = "2021"
 readme = "../README.md"
 workspace = ".."
-rust-version = "1.64.0"
+rust-version = "1.70.0"
 
 [[example]]
 name = "client"
 required-features = ["dangerous-configuration"]
 
 [dependencies]
-bytes = "1.4.0"
-quinn = "0.10.1"
-rustls = "0.21.1"
-rustls-native-certs = "0.6.2"
-rustls-pemfile = "1.0.2"
-socket2 = "0.5.3"
-thiserror = "1.0.40"
-tokio = { version = "1.28.1", default-features = false, features = ["macros"] }
+bytes = "1.5.0"
+quinn = "0.10.2"
+rustls = "0.21.7"
+rustls-native-certs = "0.6.3"
+rustls-pemfile = "1.0.3"
+socket2 = "0.5.4"
+thiserror = "1.0"
+tokio = { version = "1.32.0", default-features = false, features = ["macros"] }
 tracing = "0.1.37"
-url = "2.4.0"
+url = "2.4"
 wtransport-proto = { version = "0.1.4", path = "../wtransport-proto", features = ["async"] }
 
 [dev-dependencies]
@@ -34,8 +34,8 @@ anyhow = "1.0.71"
 base64 = "0.21.0"
 rcgen = "0.11.1"
 ring = "0.16.20"
-time = "0.3.21"
-tokio = { version = "1.28.1", features = ["rt", "rt-multi-thread", "macros"] }
+time = "0.3"
+tokio = { version = "1.32.0", features = ["rt", "rt-multi-thread", "macros"] }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 
 [features]

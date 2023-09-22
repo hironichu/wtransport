@@ -92,8 +92,6 @@ pub mod endpoint_side {
 /// ```
 pub struct Endpoint<Side> {
     endpoint: quinn::Endpoint,
-	/// The runtime used by the endpoint.
-	pub runtime: Arc<dyn Runtime>,
     _marker: PhantomData<Side>,
 }
 
