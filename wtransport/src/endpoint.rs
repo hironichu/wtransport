@@ -16,7 +16,7 @@ use socket2::Domain as SocketDomain;
 use socket2::Protocol as SocketProtocol;
 use socket2::Socket;
 use socket2::Type as SocketType;
-use wtransport_proto::varint::VarInt;
+use quinn::Runtime;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -49,6 +49,8 @@ pub struct Client;
 /// * For creating a client: [`Endpoint::client`].
 pub struct Endpoint<Side> {
     endpoint: QuicEndpoint,
+	/// The runtime used by the endpoint.
+	pub runtime: Arc<dyn Runtime>,
     _marker: PhantomData<Side>,
 }
 
@@ -78,11 +80,12 @@ impl Endpoint<Server> {
             QuicEndpointConfig::default(),
             Some(quic_config),
             socket.into(),
-            runtime,
+            runtime.clone(),
         )?;
 
         Ok(Self {
             endpoint,
+			runtime,
             _marker: PhantomData,
         })
     }
@@ -104,6 +107,10 @@ impl Endpoint<Server> {
 		let quinn_varint = quinn::VarInt::from_u32(error_code);
 		self.endpoint.close(quinn_varint, reason);
 	}
+	/// Wait for all connections to be closed.
+	pub async fn wait_idle(&self) {
+		self.endpoint.wait_idle().await;
+	}
 }
 
 impl Endpoint<Client> {
@@ -114,10 +121,11 @@ impl Endpoint<Client> {
         let runtime = Arc::new(TokioRuntime);
 
         let mut endpoint =
-            QuicEndpoint::new(QuicEndpointConfig::default(), None, socket.into(), runtime)?;
+            QuicEndpoint::new(QuicEndpointConfig::default(), None, socket.into(), runtime.clone())?;
         endpoint.set_default_client_config(quic_config);
 
         Ok(Self {
+			runtime,
             endpoint,
             _marker: PhantomData,
         })
@@ -268,6 +276,10 @@ impl Endpoint<Client> {
 	pub fn close(&self, error_code: u32, reason: &[u8]) {
 		let quinn_varint = quinn::VarInt::from_u32(error_code);
 		self.endpoint.close(quinn_varint, reason);
+	}
+	/// Wait for all connections to be closed.
+	pub async fn wait_idle(&self) {
+		self.endpoint.wait_idle().await;
 	}
 }
 

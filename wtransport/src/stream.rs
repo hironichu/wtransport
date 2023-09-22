@@ -1,3 +1,4 @@
+use crate::driver::streams::AlreadyStop;
 use crate::driver::streams::bilocal::StreamBiLocalQuic;
 use crate::driver::streams::unilocal::StreamUniLocalQuic;
 use crate::driver::streams::ProtoWriteError;
@@ -5,6 +6,7 @@ use crate::driver::streams::QuicRecvStream;
 use crate::driver::streams::QuicSendStream;
 use crate::error::StreamOpeningError;
 use crate::error::StreamReadError;
+use crate::error::StreamReadExactError;
 use crate::error::StreamWriteError;
 use std::future::Future;
 use std::pin::Pin;
@@ -109,7 +111,23 @@ impl RecvStream {
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, StreamReadError> {
         self.0.read(buf).await
     }
+    /// Awaits for the stream to be stopped by the peer.
+    ///
+    /// If the stream is stopped the error code will be stored in [`AlreadyStop`].
+    #[inline(always)]
+    pub async fn stop(mut self, code: u32) -> Result<(), AlreadyStop> {
+        self.0.stop(VarInt::from_u32(code))
+    }
 
+    /// Read an exact number of bytes contiguously from the stream.
+    ///
+    /// See [`read()`] for details.
+    ///
+    /// [`read()`]: RecvStream::read
+	#[inline(always)]
+	pub async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), StreamReadExactError> {
+		self.0.read_exact(buf).await
+	}
     /// Returns the [`StreamId`] associated.
     #[inline(always)]
     pub fn id(&self) -> StreamId {
