@@ -94,6 +94,22 @@ impl SendStream {
     pub async fn stopped(mut self) -> StreamWriteError {
         self.0.stopped().await
     }
+
+    /// Returns a reference to the underlying QUIC stream.
+    #[cfg(feature = "quinn")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "quinn")))]
+    #[inline(always)]
+    pub fn quic_stream(&self) -> &quinn::SendStream {
+        self.0.quic_stream()
+    }
+
+    /// Returns a mutable reference to the underlying QUIC stream.
+    #[cfg(feature = "quinn")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "quinn")))]
+    #[inline(always)]
+    pub fn quic_stream_mut(&mut self) -> &mut quinn::SendStream {
+        self.0.quic_stream_mut()
+    }
 }
 
 /// A stream that can only be used to receive data.
@@ -122,19 +138,34 @@ impl RecvStream {
         self.0.stop(VarInt::from_u32(code))
     }
 
-    /// Read an exact number of bytes contiguously from the stream.
+    /// Reads an exact number of bytes contiguously from the stream.
     ///
-    /// See [`read()`] for details.
-    ///
-    /// [`read()`]: RecvStream::read
-	#[inline(always)]
-	pub async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), StreamReadExactError> {
-		self.0.read_exact(buf).await
-	}
+    /// If the stream terminates before the entire length has been read, it
+    /// returns [`StreamReadExactError::FinishedEarly`].
+    pub async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), StreamReadExactError> {
+        self.0.read_exact(buf).await
+    }
+
     /// Returns the [`StreamId`] associated.
     #[inline(always)]
     pub fn id(&self) -> StreamId {
         self.0.id()
+    }
+
+    /// Returns a reference to the underlying QUIC stream.
+    #[cfg(feature = "quinn")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "quinn")))]
+    #[inline(always)]
+    pub fn quic_stream(&self) -> &quinn::RecvStream {
+        self.0.quic_stream()
+    }
+
+    /// Returns a mutable reference to the underlying QUIC stream.
+    #[cfg(feature = "quinn")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "quinn")))]
+    #[inline(always)]
+    pub fn quic_stream_mut(&mut self) -> &mut quinn::RecvStream {
+        self.0.quic_stream_mut()
     }
 }
 
