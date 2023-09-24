@@ -10,6 +10,7 @@ use crate::driver::Driver;
 use crate::error::ConnectingError;
 use crate::error::ConnectionError;
 use quinn::TokioRuntime;
+
 use socket2::Domain as SocketDomain;
 use socket2::Protocol as SocketProtocol;
 use socket2::Socket;
@@ -135,7 +136,7 @@ impl Endpoint<endpoint_side::Server> {
             quinn::EndpointConfig::default(),
             Some(quic_config),
             socket.into(),
-            runtime,
+            runtime.clone(),
         )?;
 
         Ok(Self {
@@ -156,6 +157,12 @@ impl Endpoint<endpoint_side::Server> {
 
         IncomingSession::new(quic_connecting)
     }
+	/// Close the endpoint.
+	pub fn close(&self, error_code: u32, reason: &[u8]) {
+		let quinn_varint = quinn::VarInt::from_u32(error_code);
+		self.endpoint.close(quinn_varint, reason);
+	}
+
 }
 
 impl Endpoint<endpoint_side::Client> {
@@ -356,6 +363,12 @@ impl Endpoint<endpoint_side::Client> {
 
         Ok(Connection::new(quic_connection, driver, session_id))
     }
+	/// Close the endpoint.
+	pub fn close(&self, error_code: u32, reason: &[u8]) {
+		let quinn_varint = quinn::VarInt::from_u32(error_code);
+		self.endpoint.close(quinn_varint, reason);
+	}
+
 }
 
 type DynFutureIncomingSession =

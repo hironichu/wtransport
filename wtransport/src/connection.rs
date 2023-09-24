@@ -111,7 +111,8 @@ use wtransport_proto::varint::VarInt;
 /// For more details, see the [module documentation](crate::connection).
 #[derive(Debug)]
 pub struct Connection {
-    quic_connection: quinn::Connection,
+	/// Underlying QUIC connection.
+    pub quic_connection: quinn::Connection,
     driver: Driver,
     session_id: SessionId,
 }

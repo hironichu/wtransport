@@ -1,3 +1,4 @@
+use crate::driver::streams::AlreadyStop;
 use crate::driver::streams::bilocal::StreamBiLocalQuic;
 use crate::driver::streams::unilocal::StreamUniLocalQuic;
 use crate::driver::streams::ProtoWriteError;
@@ -127,6 +128,14 @@ impl RecvStream {
     #[inline(always)]
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, StreamReadError> {
         self.0.read(buf).await
+    }
+	
+    /// Awaits for the stream to be stopped by the peer.
+    ///
+    /// If the stream is stopped the error code will be stored in [`AlreadyStop`].
+    #[inline(always)]
+    pub async fn stop(&mut self, code: u32) -> Result<(), AlreadyStop> {
+        self.0.stop(VarInt::from_u32(code))
     }
 
     /// Reads an exact number of bytes contiguously from the stream.
